@@ -204,7 +204,7 @@ async def process_staff_list(msg: types.Message):
     data = db_execute("SELECT name, role, last_seen FROM staff", fetch=True)
     if not data: return await msg.answer("Список пуст.")
     
-    output = "👥 **Команда Три Кота:**\n\n"
+    output = "👥 **Сотрудники этого бота:**\n\n"
     now = int(time.time())
     
     for member in data:
