@@ -219,9 +219,14 @@ async def process_my_rank(msg: types.Message):
 
 @dp.message(F.text == "➕ Добавить аккаунт")
 async def reg_1(msg: types.Message, state: FSMContext):
-    await msg.answer("📝 Введите ваш Ник и Эло через пробел (Пример: `User 1500`):", reply_markup=get_cancel_kb())
+    await msg.answer(
+        "📝 **Введите ваш Ник и Эло через пробел.**\n\n"
+        "Например: `Gamer 1200`\n"
+        "_(Кавычки вводить не нужно, просто текст и число)_", 
+        reply_markup=get_cancel_kb(), 
+        parse_mode="Markdown"
+    )
     await state.set_state(RegState.input_data)
-
 @dp.message(RegState.input_data)
 async def reg_2(msg: types.Message, state: FSMContext):
     try:
