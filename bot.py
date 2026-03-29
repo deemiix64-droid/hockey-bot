@@ -12,14 +12,13 @@ from aiohttp import web
 
 # --- КОНФИГ ---
 TOKEN = os.getenv("BOT_TOKEN")
-ADMINS = [8239542728] # Твой ID
+OWNER_ID = 8239542728 # Твой ID
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 logging.basicConfig(level=logging.INFO)
 
-# --- ТЕКСТЫ ---
-DISCLAIMER = "\n\n⚠️ **Отказ от ответственности:**\nБот создан в развлекательных целях фанатским сообществом. Проект **не связан** с компаниями **AppQuiz** или **Edujoy**."
+DISCLAIMER = "\n\n⚠️ **Отказ от ответственности:**\nБот создан фанатами. Не связан с AppQuiz/Edujoy."
 
 # --- СОСТОЯНИЯ ---
 class RequestScore(StatesGroup):
@@ -49,13 +48,7 @@ def init_db():
     db_query('''CREATE TABLE IF NOT EXISTS staff (user_id INTEGER PRIMARY KEY, name TEXT, role TEXT, elo INTEGER, last_seen INTEGER)''')
     db_query('''CREATE TABLE IF NOT EXISTS pending (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, type TEXT, name TEXT, elo INTEGER, photo_id TEXT)''')
     db_query("INSERT OR IGNORE INTO staff (user_id, name, role, elo, last_seen) VALUES (?, ?, ?, ?, ?)", 
-             (8239542728, "orbsi", "Владелец", 4002, int(time.time())))
-
-def get_time_ago(seconds):
-    diff = int(time.time()) - seconds
-    if diff < 60: return "только что"
-    elif diff < 3600: return f"{diff // 60} мин. назад"
-    else: return f"{diff // 3600} ч. назад"
+             (OWNER_ID, "orbsi", "Владелец", 4002, int(time.time())))
 
 def get_main_kb(user_id):
     is_staff = db_query("SELECT 1 FROM staff WHERE user_id = ?", (user_id,), fetch=True)
@@ -64,166 +57,170 @@ def get_main_kb(user_id):
         [KeyboardButton(text="🏆 Топ 10"), KeyboardButton(text="🌟 Топ 100")],
         [KeyboardButton(text="📊 Мой рейтинг"), KeyboardButton(text="👥 Сотрудники")]
     ]
-    if user_id in ADMINS or is_staff:
+    if user_id == OWNER_ID or is_staff:
         buttons.append([KeyboardButton(text="⚙️ Админ Панель")])
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
-# --- ХЕНДЛЕРЫ ---
+# --- АДМИН-КОМАНДЫ (СТРОГАЯ ПРОВЕРКА) ---
+
+@dp.message(Command("addstaff"))
+async def add_staff_cmd(message: types.Message):
+    if message.from_user.id != OWNER_ID: return
+    try:
+        args = message.text.split()
+        sid, sname, srole = int(args[1]), args[2], " ".join(args[3:])
+        db_query("INSERT OR REPLACE INTO staff (user_id, name, role, elo, last_seen) VALUES (?, ?, ?, ?, ?)", 
+                 (sid, sname, srole, 0, int(time.time())))
+        await message.answer(f"✅ {sname} добавлен в команду!")
+    except: await message.answer("Ошибка! Формат: `/addstaff ID Имя Роль`")
+
+@dp.message(Command("staffelo"))
+async def set_staff_elo(message: types.Message):
+    is_staff = db_query("SELECT 1 FROM staff WHERE user_id = ?", (message.from_user.id,), fetch=True)
+    if not (message.from_user.id == OWNER_ID or is_staff): return
+    try:
+        args = message.text.split()
+        name, elo = args[1], int(args[2])
+        db_query("UPDATE staff SET elo = ? WHERE name = ?", (elo, name))
+        await message.answer(f"✅ Эло сотрудника {name} изменено на {elo}")
+    except: await message.answer("Формат: `/staffelo Имя Число`")
+
+@dp.message(Command("del"))
+async def delete_user(message: types.Message):
+    is_staff = db_query("SELECT 1 FROM staff WHERE user_id = ?", (message.from_user.id,), fetch=True)
+    if not (message.from_user.id == OWNER_ID or is_staff): return
+    name = message.text.replace("/del ", "").strip()
+    db_query("DELETE FROM users WHERE username = ?", (name,))
+    await message.answer(f"🗑 Игрок {name} удален из ТОПа.")
+
+# --- ОСНОВНЫЕ ХЕНДЛЕРЫ ---
 
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message, state: FSMContext):
-    await state.clear() # Сброс любых зависших состояний
+    await state.clear()
     db_query("INSERT OR IGNORE INTO all_users (user_id) VALUES (?)", (message.from_user.id,))
     await message.answer(f"🏒 **Лидерборд Три Кота Хоккей!**{DISCLAIMER}", reply_markup=get_main_kb(message.from_user.id), parse_mode="Markdown")
 
 @dp.message(F.text == "📊 Мой рейтинг")
 async def my_rating(message: types.Message):
     user = db_query("SELECT username, elo FROM users WHERE user_id = ?", (message.from_user.id,), fetch=True)
-    if not user:
-        return await message.answer("❌ Тебя еще нет в рейтинге. Нажми 'Добавить аккаунт'!")
+    if not user: return await message.answer("❌ Тебя нет в рейтинге.")
     all_users = db_query("SELECT user_id FROM users ORDER BY elo DESC, id ASC", fetch=True)
     rank = next((i for i, (uid,) in enumerate(all_users, 1) if uid == message.from_user.id), "?")
-    await message.answer(f"📊 **Твой профиль:**\n👤 Ник: `{user[0][0]}`\n🏒 Эло: `{user[0][1]}`\n🏆 Место: **{rank}**", parse_mode="Markdown")
+    await message.answer(f"📊 **Профиль:**\nНик: `{user[0][0]}`\nЭло: `{user[0][1]}`\nМесто: **{rank}**", parse_mode="Markdown")
 
 @dp.message(F.text == "👥 Сотрудники")
 async def show_staff(message: types.Message):
-    staff_list = db_query("SELECT name, role, elo, last_seen FROM staff", fetch=True)
-    text = "👥 **Наша команда**\n\n"
-    for s in staff_list:
-        text += f"⚙️ **{s[0]}** ({s[2]} эло)\n└ {s[1]}\n🕒 Активен: {get_time_ago(s[3])}\n\n"
+    staff = db_query("SELECT name, role, elo, last_seen FROM staff", fetch=True)
+    text = "👥 **Команда проекта:**\n\n"
+    for s in staff:
+        ago = "только что" if (int(time.time()) - s[3]) < 60 else f"{(int(time.time()) - s[3]) // 60} мин. назад"
+        text += f"⚙️ **{s[0]}** ({s[2]} эло)\n└ {s[1]} | {ago}\n\n"
     await message.answer(text, parse_mode="Markdown")
 
-# --- ЛОГИКА ЗАЯВОК ---
+# --- СИСТЕМА ЗАЯВОК ---
 
 @dp.message(F.text == "➕ Добавить аккаунт")
 async def req_add(message: types.Message, state: FSMContext):
-    await message.answer("📝 Введите ваш Ник и Эло через пробел:")
-    await state.set_state(RequestScore.waiting_for_data)
+    await message.answer("📝 Введите Ник и Эло через пробел:"); await state.set_state(RequestScore.waiting_for_data)
 
 @dp.message(RequestScore.waiting_for_data)
 async def proc_add_data(message: types.Message, state: FSMContext):
     try:
-        parts = message.text.split()
-        name, elo = parts[0], int(parts[1])
-        await state.update_data(name=name, elo=elo)
-        await message.answer("📸 Пришлите скриншот подтверждения (главное меню игры):")
-        await state.set_state(RequestScore.waiting_for_photo)
-    except: await message.answer("Ошибка! Пишите через пробел: `Guptek 7000`")
+        n, e = message.text.split()[0], int(message.text.split()[1])
+        await state.update_data(n=n, e=e); await message.answer("📸 Скриншот меню:"); await state.set_state(RequestScore.waiting_for_photo)
+    except: await message.answer("Пример: `Guptek 7000`")
 
 @dp.message(RequestScore.waiting_for_photo, F.photo)
 async def proc_add_photo(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    db_query("INSERT INTO pending (user_id, type, name, elo, photo_id) VALUES (?, ?, ?, ?, ?)", 
-             (message.from_user.id, "NEW", data['name'], data['elo'], message.photo[-1].file_id))
-    await message.answer("⏳ Заявка отправлена на модерацию!"); await state.clear()
+    d = await state.get_data()
+    db_query("INSERT INTO pending (user_id, type, name, elo, photo_id) VALUES (?, ?, ?, ?, ?)", (message.from_user.id, "NEW", d['n'], d['e'], message.photo[-1].file_id))
+    await message.answer("⏳ Отправлено!"); await state.clear()
 
 @dp.message(F.text == "🔄 Обновить эло")
 async def req_upd(message: types.Message, state: FSMContext):
-    user_data = db_query("SELECT username FROM users WHERE user_id = ?", (message.from_user.id,), fetch=True)
-    if not user_data:
-        await message.answer("❌ Сначала добавьте аккаунт через кнопку '➕ Добавить аккаунт'!")
-    else:
-        await state.update_data(name=user_data[0][0])
-        await message.answer(f"👤 Ник: **{user_data[0][0]}**\n📝 Введите ваше НОВОЕ Эло (число):", parse_mode="Markdown")
-        await state.set_state(UpdateScore.waiting_for_elo)
+    u = db_query("SELECT username FROM users WHERE user_id = ?", (message.from_user.id,), fetch=True)
+    if not u: return await message.answer("❌ Сначала добавьте аккаунт!")
+    await state.update_data(n=u[0][0]); await message.answer(f"Ник: **{u[0][0]}**\n📝 Введите НОВОЕ Эло:", parse_mode="Markdown")
+    await state.set_state(UpdateScore.waiting_for_elo)
 
 @dp.message(UpdateScore.waiting_for_elo)
-async def proc_upd_data(message: types.Message, state: FSMContext):
-    if not message.text.isdigit(): return await message.answer("Введите только число!")
-    await state.update_data(elo=int(message.text))
-    await message.answer("📸 Пришлите скриншот подтверждения (главное меню игры):")
-    await state.set_state(UpdateScore.waiting_for_photo)
+async def proc_upd_elo(message: types.Message, state: FSMContext):
+    if not message.text.isdigit(): return await message.answer("Число!")
+    await state.update_data(e=int(message.text)); await message.answer("📸 Скриншот:"); await state.set_state(UpdateScore.waiting_for_photo)
 
 @dp.message(UpdateScore.waiting_for_photo, F.photo)
 async def proc_upd_photo(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    db_query("INSERT INTO pending (user_id, type, name, elo, photo_id) VALUES (?, ?, ?, ?, ?)", 
-             (message.from_user.id, "UPDATE", data['name'], data['elo'], message.photo[-1].file_id))
-    await message.answer("⏳ Запрос на обновление отправлен!"); await state.clear()
+    d = await state.get_data()
+    db_query("INSERT INTO pending (user_id, type, name, elo, photo_id) VALUES (?, ?, ?, ?, ?)", (message.from_user.id, "UPDATE", d['n'], d['e'], message.photo[-1].file_id))
+    await message.answer("⏳ Запрос отправлен!"); await state.clear()
 
 # --- АДМИН ПАНЕЛЬ ---
 
 @dp.message(F.text == "⚙️ Админ Панель")
 async def adm_menu(message: types.Message):
-    is_staff = db_query("SELECT 1 FROM staff WHERE user_id = ?", (message.from_user.id,), fetch=True)
-    if not (message.from_user.id in ADMINS or is_staff): return
+    is_s = db_query("SELECT 1 FROM staff WHERE user_id = ?", (message.from_user.id,), fetch=True)
+    if not (message.from_user.id == OWNER_ID or is_s): return
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📢 Рассылка", callback_data="broadcast"), InlineKeyboardButton(text="📊 Статистика", callback_data="stats")],
-        [InlineKeyboardButton(text="📂 Все заявки", callback_data="all_reqs")]
+        [InlineKeyboardButton(text="📢 Рассылка", callback_data="br"), InlineKeyboardButton(text="📊 Стата", callback_data="st")],
+        [InlineKeyboardButton(text="📂 Заявки", callback_data="all_r")]
     ])
-    await message.answer("🛠 Админ Панель:", reply_markup=kb)
+    await message.answer("🛠 Админка:", reply_markup=kb)
 
-@dp.callback_query(F.data == "all_reqs")
-async def show_all_requests(call: types.CallbackQuery):
-    reqs = db_query("SELECT id, type, name, elo, photo_id FROM pending LIMIT 1", fetch=True)
-    if not reqs: return await call.message.answer("Заявок нет.")
-    r_id, r_type, r_name, r_elo, r_photo = reqs[0]
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Одобрить", callback_data=f"ap_{r_id}"), InlineKeyboardButton(text="❌ Отклонить", callback_data=f"rj_{r_id}")]
-    ])
-    await bot.send_photo(call.from_user.id, r_photo, caption=f"📦 **Заявка #{r_id}**\n👤 Ник: {r_name}\n🏒 Эло: {r_elo}\nТип: {r_type}", reply_markup=kb, parse_mode="Markdown")
+@dp.callback_query(F.data == "all_r")
+async def show_reqs(call: types.CallbackQuery):
+    r = db_query("SELECT id, type, name, elo, photo_id FROM pending LIMIT 1", fetch=True)
+    if not r: return await call.message.answer("Заявок нет.")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅", callback_data=f"a_{r[0][0]}"), InlineKeyboardButton(text="❌", callback_data=f"r_{r[0][0]}")]])
+    await bot.send_photo(call.from_user.id, r[0][4], caption=f"📦 #{r[0][0]} | {r[0][1]}\n👤 {r[0][2]}\n🏒 {r[0][3]}", reply_markup=kb)
     await call.answer()
 
-@dp.callback_query(F.data.startswith(("ap_", "rj_")))
-async def handle_request(call: types.CallbackQuery):
-    action, r_id = call.data.split("_")
-    data = db_query("SELECT user_id, type, name, elo FROM pending WHERE id = ?", (int(r_id),), fetch=True)
-    if not data: return
-    uid, r_type, name, elo = data[0]
-
-    if action == "ap":
-        if r_type == "NEW":
-            db_query("INSERT INTO users (user_id, username, elo) VALUES (?, ?, ?)", (uid, name, elo))
-        else:
-            db_query("UPDATE users SET elo = ? WHERE user_id = ?", (elo, uid))
-        try: await bot.send_message(uid, f"✅ Одобрено! Твой ник **{name}** в топе.", parse_mode="Markdown")
+@dp.callback_query(F.data.startswith(("a_", "r_")))
+async def h_req(call: types.CallbackQuery):
+    act, rid = call.data.split("_")
+    d = db_query("SELECT user_id, type, name, elo FROM pending WHERE id = ?", (int(rid),), fetch=True)
+    if d and act == "a":
+        if d[0][1] == "NEW": db_query("INSERT INTO users (user_id, username, elo) VALUES (?, ?, ?)", (d[0][0], d[0][2], d[0][3]))
+        else: db_query("UPDATE users SET elo = ? WHERE user_id = ?", (d[0][3], d[0][0]))
+        try: await bot.send_message(d[0][0], "✅ Одобрено!")
         except: pass
-    else:
-        try: await bot.send_message(uid, "❌ Твоя заявка отклонена.")
-        except: pass
-    
-    db_query("DELETE FROM pending WHERE id = ?", (int(r_id),))
-    await call.message.delete()
-    await call.answer("Обработано!")
+    db_query("DELETE FROM pending WHERE id = ?", (int(rid),))
+    await call.message.delete(); await call.answer("Готово!")
 
-@dp.callback_query(F.data == "stats")
-async def stats_call(call: types.CallbackQuery):
-    total = db_query("SELECT COUNT(*) FROM all_users", fetch=True)[0][0]
-    in_top = db_query("SELECT COUNT(*) FROM users", fetch=True)[0][0]
-    waiting = db_query("SELECT COUNT(*) FROM pending", fetch=True)[0][0]
-    await call.message.answer(f"📊 **Статистика:**\n👥 Юзеры: **{total}**\n🏒 В топе: **{in_top}**\n⏳ Ждут: **{waiting}**", parse_mode="Markdown")
-    await call.answer()
-
-# --- ТОПЫ И РАССЫЛКА ---
+@dp.callback_query(F.data == "st")
+async def st_call(call: types.CallbackQuery):
+    u = db_query("SELECT COUNT(*) FROM all_users", fetch=True)[0][0]
+    t = db_query("SELECT COUNT(*) FROM users", fetch=True)[0][0]
+    p = db_query("SELECT COUNT(*) FROM pending", fetch=True)[0][0]
+    await call.message.answer(f"📊 Юзеры: **{u}**\n🏒 В топе: **{t}**\n⏳ Ждут: **{p}**", parse_mode="Markdown"); await call.answer()
 
 @dp.message(F.text.in_({"🏆 Топ 10", "🌟 Топ 100"}))
-async def show_top(message: types.Message):
-    limit = 10 if "10" in message.text else 100
-    users = db_query("SELECT username, elo FROM users ORDER BY elo DESC LIMIT ?", (limit,), fetch=True)
-    res = f"🏆 **{message.text}**\n\n" + ("Пусто." if not users else "\n".join([f"{i+1}. {u[0]} — `{u[1]}`" for i, u in enumerate(users)]))
+async def s_top(message: types.Message):
+    l = 10 if "10" in message.text else 100
+    u = db_query("SELECT username, elo FROM users ORDER BY elo DESC LIMIT ?", (l,), fetch=True)
+    res = f"🏆 **{message.text}**\n\n" + ("Пусто." if not u else "\n".join([f"{i+1}. {x[0]} — `{x[1]}`" for i, x in enumerate(u)]))
     await message.answer(res, parse_mode="Markdown")
 
-@dp.callback_query(F.data == "broadcast")
-async def br_start(call: types.CallbackQuery, state: FSMContext):
-    await call.message.answer("Введите текст рассылки:"); await state.set_state(BroadcastState.waiting_for_msg)
+@dp.callback_query(F.data == "br")
+async def br_s(call: types.CallbackQuery, state: FSMContext):
+    await call.message.answer("Текст рассылки:"); await state.set_state(BroadcastState.waiting_for_msg)
 
 @dp.message(BroadcastState.waiting_for_msg)
-async def br_send(message: types.Message, state: FSMContext):
-    users = db_query("SELECT user_id FROM all_users", fetch=True)
-    for u in users:
+async def br_e(message: types.Message, state: FSMContext):
+    us = db_query("SELECT user_id FROM all_users", fetch=True)
+    for u in us:
         try: await bot.send_message(u[0], f"📢 **РАССЫЛКА**\n\n{message.text}", parse_mode="Markdown")
         except: pass
     await message.answer("✅ Готово!"); await state.clear()
 
-@dp.message() # Активность сотрудников
-async def track_activity(message: types.Message):
+@dp.message()
+async def track(message: types.Message):
     db_query("UPDATE staff SET last_seen = ? WHERE user_id = ?", (int(time.time()), message.from_user.id))
 
-# --- ЗАПУСК ---
-async def handle_ping(r): return web.Response(text="ok")
+async def handle_p(r): return web.Response(text="ok")
 async def main():
     init_db()
-    app = web.Application(); app.router.add_get("/", handle_ping)
+    app = web.Application(); app.router.add_get("/", handle_p)
     runner = web.AppRunner(app); await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 8080))).start()
     await dp.start_polling(bot)
