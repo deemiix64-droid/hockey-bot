@@ -87,6 +87,26 @@ def init_db():
     db_execute("INSERT OR IGNORE INTO staff VALUES (?, ?, ?, ?)", (OWNER_ID, "orbsi", "Владелец", int(time.time())))
     logger.info("Database initialized successfully.")
 
+# --- НОВАЯ ФУНКЦИЯ: УВЕДОМЛЕНИЕ АДМИНОВ ---
+async def notify_admins_about_request(text):
+    """Функция рассылки уведомления всем админам"""
+    staff_members = db_execute("SELECT user_id FROM staff", fetch=True)
+    if staff_members:
+        # Кнопка для быстрого перехода к списку заявок
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📂 Посмотреть заявки", callback_data="adm_requests")]
+        ])
+        for staff in staff_members:
+            try:
+                await bot.send_message(
+                    staff[0], 
+                    f"🔔 **Новая заявка в очереди!**\n\n{text}", 
+                    parse_mode="Markdown",
+                    reply_markup=kb
+                )
+            except Exception as e:
+                logger.error(f"Не удалось отправить уведомление админу {staff[0]}: {e}")
+
 # --- 4. KEYBOARDS ---
 def get_main_kb(uid):
     """Динамическая клавиатура: кнопки админа видны только персоналу"""
@@ -226,6 +246,7 @@ async def reg_1(msg: types.Message, state: FSMContext):
         parse_mode="Markdown"
     )
     await state.set_state(RegState.input_data)
+
 @dp.message(RegState.input_data)
 async def reg_2(msg: types.Message, state: FSMContext):
     try:
@@ -243,7 +264,12 @@ async def reg_3(msg: types.Message, state: FSMContext):
     d = await state.get_data()
     db_execute("INSERT INTO queue (user_id, q_type, name, elo, photo, created_at) VALUES (?, 'NEW', ?, ?, ?, ?)",
                (msg.from_user.id, d['n'], d['e'], msg.photo[-1].file_id, datetime.now().strftime("%d.%m %H:%M")))
+    
     await msg.answer("⏳ Заявка на проверке модератором!", reply_markup=get_main_kb(msg.from_user.id))
+    
+    # ОТПРАВЛЯЕМ УВЕДОМЛЕНИЕ
+    await notify_admins_about_request(f"Тип: 🆕 РЕГИСТРАЦИЯ\nНик: `{d['n']}`\nЭло: `{d['e']}`")
+    
     await state.clear()
 
 # --- 8. LOGIC: UPDATE ELO ---
@@ -267,7 +293,12 @@ async def upd_3(msg: types.Message, state: FSMContext):
     u = db_execute("SELECT username FROM users WHERE user_id = ?", (msg.from_user.id,), fetchone=True)
     db_execute("INSERT INTO queue (user_id, q_type, name, elo, photo, created_at) VALUES (?, 'UPDATE', ?, ?, ?, ?)",
                (msg.from_user.id, u[0], d['new_e'], msg.photo[-1].file_id, "UPD"))
+    
     await msg.answer("✅ Заявка на обновление отправлена!", reply_markup=get_main_kb(msg.from_user.id))
+    
+    # ОТПРАВЛЯЕМ УВЕДОМЛЕНИЕ
+    await notify_admins_about_request(f"Тип: 🔄 ОБНОВЛЕНИЕ\nНик: `{u[0]}`\nНовое Эло: `{d['new_e']}`")
+    
     await state.clear()
 
 # --- 9. ADMIN PANEL & BROADCAST ---
