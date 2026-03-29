@@ -221,8 +221,7 @@ async def process_my_rank(msg: types.Message):
 async def reg_1(msg: types.Message, state: FSMContext):
     await msg.answer(
         "📝 **Введите ваш Ник и Эло через пробел.**\n\n"
-        "Например: `Gamer 1200`\n"
-        "_(Кавычки вводить не нужно, просто текст и число)_", 
+        "Например: `Gamer 1200`\n", 
         reply_markup=get_cancel_kb(), 
         parse_mode="Markdown"
     )
