@@ -32,10 +32,15 @@ logger = logging.getLogger("HockeyBot")
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# --- MiddleWare для отслеживания активности ---
+# --- MiddleWare для отслеживания активности и проверки бана ---
 @dp.message.outer_middleware()
-async def track_staff_activity(handler, event: types.Message, data: dict):
-    """Обновляет время последнего визита, если пишет сотрудник или владелец"""
+async def track_and_check(handler, event: types.Message, data: dict):
+    # Проверка на бан
+    ban_data = db_execute("SELECT reason FROM blacklist WHERE user_id = ?", (event.from_user.id,), fetchone=True)
+    if ban_data:
+        return await event.answer(f"❌ Вы были заблокированы по причине: {ban_data[0]}")
+    
+    # Обновление активности персонала
     db_execute("UPDATE staff SET last_seen = ? WHERE user_id = ?", (int(time.time()), event.from_user.id))
     return await handler(event, data)
 
@@ -90,6 +95,10 @@ def init_db():
         photo TEXT, 
         created_at TEXT
     )""")
+    db_execute("""CREATE TABLE IF NOT EXISTS blacklist (
+        user_id INTEGER PRIMARY KEY,
+        reason TEXT
+    )""")
     # Авто-регистрация владельца
     db_execute("INSERT OR IGNORE INTO staff VALUES (?, ?, ?, ?)", (OWNER_ID, "orbsi", "Владелец", int(time.time())))
     logger.info("Database initialized successfully.")
@@ -134,7 +143,28 @@ def get_cancel_kb():
     """Клавиатура для выхода из любого состояния"""
     return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="❌ Отмена")]], resize_keyboard=True)
 
-# --- 5. GLOBAL COMMANDS (/del & /add_staff) ---
+# --- 5. GLOBAL COMMANDS (/del, /add_staff, /ban, /unban) ---
+
+@dp.message(Command("ban"))
+async def cmd_ban(msg: types.Message):
+    if msg.from_user.id != OWNER_ID: return
+    try:
+        args = msg.text.split(maxsplit=2)
+        user_id, reason = int(args[1]), args[2]
+        db_execute("INSERT OR REPLACE INTO blacklist VALUES (?, ?)", (user_id, reason))
+        await msg.answer(f"🚫 Пользователь `{user_id}` заблокирован.\nПричина: {reason}")
+    except:
+        await msg.answer("⚠️ Формат: `/ban ID Причина`")
+
+@dp.message(Command("unban"))
+async def cmd_unban(msg: types.Message):
+    if msg.from_user.id != OWNER_ID: return
+    try:
+        user_id = int(msg.text.split()[1])
+        db_execute("DELETE FROM blacklist WHERE user_id = ?", (user_id,))
+        await msg.answer(f"✅ Пользователь `{user_id}` разблокирован.")
+    except:
+        await msg.answer("⚠️ Формат: `/unban ID`")
 
 @dp.message(Command("del"))
 async def cmd_delete_player(msg: types.Message):
@@ -204,7 +234,7 @@ async def process_staff_list(msg: types.Message):
     data = db_execute("SELECT name, role, last_seen FROM staff", fetch=True)
     if not data: return await msg.answer("Список пуст.")
     
-    output = "👥 **Сотрудники этого бота:**\n\n"
+    output = "👥 **Команда Три Кота:**\n\n"
     now = int(time.time())
     
     for member in data:
