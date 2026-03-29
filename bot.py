@@ -143,7 +143,22 @@ def get_cancel_kb():
     """Клавиатура для выхода из любого состояния"""
     return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="❌ Отмена")]], resize_keyboard=True)
 
-# --- 5. GLOBAL COMMANDS (/del, /add_staff, /ban, /unban) ---
+# --- 5. GLOBAL COMMANDS (/del, /add_staff, /ban, /unban, /banlist) ---
+
+@dp.message(Command("banlist"))
+async def cmd_banlist(msg: types.Message):
+    """Вывод списка заблокированных пользователей"""
+    if msg.from_user.id != OWNER_ID: return
+    
+    bans = db_execute("SELECT user_id, reason FROM blacklist", fetch=True)
+    if not bans:
+        return await msg.answer("📋 Список заблокированных пуст.")
+    
+    res = "🚫 **Список заблокированных:**\n\n"
+    for b_id, reason in bans:
+        res += f"`{b_id}`\n{reason}\n\n"
+    
+    await msg.answer(res, parse_mode="Markdown")
 
 @dp.message(Command("ban"))
 async def cmd_ban(msg: types.Message):
