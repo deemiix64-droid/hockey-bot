@@ -131,7 +131,7 @@ def get_cancel_kb():
 
 @dp.message(Command("del"))
 async def cmd_delete_player(msg: types.Message):
-    """Удаление игрока: /del [Ник или ID]"""
+    """Удаление игрока: /del [Ник или ID] с проверкой наличия"""
     if msg.from_user.id != OWNER_ID:
         return
     
@@ -140,13 +140,24 @@ async def cmd_delete_player(msg: types.Message):
         return await msg.answer("⚠️ Использование: `/del Ник` или `/del 12345`", parse_mode="Markdown")
     
     target = args[1]
+    
+    # ПРОВЕРКА: Существует ли игрок?
+    if target.isdigit():
+        exists = db_execute("SELECT username FROM users WHERE user_id = ?", (int(target),), fetchone=True)
+    else:
+        exists = db_execute("SELECT user_id FROM users WHERE username = ?", (target,), fetchone=True)
+        
+    if not exists:
+        return await msg.answer(f"❌ Игрок **{target}** не найден в базе данных.", parse_mode="Markdown")
+    
+    # Если нашли — удаляем
     if target.isdigit():
         db_execute("DELETE FROM users WHERE user_id = ?", (int(target),))
     else:
         db_execute("DELETE FROM users WHERE username = ?", (target,))
     
     logger.info(f"Owner deleted user: {target}")
-    await msg.answer(f"🗑 Игрок **{target}** полностью удален из базы.", parse_mode="Markdown")
+    await msg.answer(f"🗑 Игрок **{target}** успешно удален из базы.", parse_mode="Markdown")
 
 @dp.message(Command("add_staff"))
 async def cmd_add_staff(msg: types.Message):
