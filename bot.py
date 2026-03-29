@@ -32,6 +32,13 @@ logger = logging.getLogger("HockeyBot")
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
+# --- MiddleWare для отслеживания активности ---
+@dp.message.outer_middleware()
+async def track_staff_activity(handler, event: types.Message, data: dict):
+    """Обновляет время последнего визита, если пишет сотрудник или владелец"""
+    db_execute("UPDATE staff SET last_seen = ? WHERE user_id = ?", (int(time.time()), event.from_user.id))
+    return await handler(event, data)
+
 # --- 2. FSM STATES ---
 class RegState(StatesGroup):
     input_data = State()
@@ -131,7 +138,7 @@ def get_cancel_kb():
 
 @dp.message(Command("del"))
 async def cmd_delete_player(msg: types.Message):
-    """Удаление игрока: /del [Ник или ID] с проверкой наличия"""
+    """Удаление игрока: /del [Ник или ID]"""
     if msg.from_user.id != OWNER_ID:
         return
     
@@ -141,23 +148,23 @@ async def cmd_delete_player(msg: types.Message):
     
     target = args[1]
     
-    # ПРОВЕРКА: Существует ли игрок?
+    # Проверка наличия игрока перед удалением
+    exists = None
     if target.isdigit():
         exists = db_execute("SELECT username FROM users WHERE user_id = ?", (int(target),), fetchone=True)
     else:
         exists = db_execute("SELECT user_id FROM users WHERE username = ?", (target,), fetchone=True)
         
     if not exists:
-        return await msg.answer(f"❌ Игрок **{target}** не найден в базе данных.", parse_mode="Markdown")
-    
-    # Если нашли — удаляем
+        return await msg.answer(f"❌ Игрок **{target}** не найден в базе.", parse_mode="Markdown")
+
     if target.isdigit():
         db_execute("DELETE FROM users WHERE user_id = ?", (int(target),))
     else:
         db_execute("DELETE FROM users WHERE username = ?", (target,))
     
     logger.info(f"Owner deleted user: {target}")
-    await msg.answer(f"🗑 Игрок **{target}** успешно удален из базы.", parse_mode="Markdown")
+    await msg.answer(f"🗑 Игрок **{target}** полностью удален из базы.", parse_mode="Markdown")
 
 @dp.message(Command("add_staff"))
 async def cmd_add_staff(msg: types.Message):
@@ -187,8 +194,6 @@ async def process_cancel(message: types.Message, state: FSMContext):
 @dp.message(CommandStart())
 async def process_start(msg: types.Message, state: FSMContext):
     await state.clear()
-    # Обновляем активность персонала
-    db_execute("UPDATE staff SET last_seen = ? WHERE user_id = ?", (int(time.time()), msg.from_user.id))
     
     text = "🏒 **Лидерборд Три Кота Хоккей**\n\nВыбирай действие на кнопках ниже:"
     await msg.answer(text, reply_markup=get_main_kb(msg.from_user.id), parse_mode="Markdown")
